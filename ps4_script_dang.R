@@ -59,5 +59,36 @@ liquor_fit |>
   features(.innov, ljung_box, lag = 24, dof = 6)
 # Q = 120, p-value = 0, so we reject white noise.
 
+# 2.3 The Horse Race
+
+liquor_cv <- liquor |> 
+  stretch_tsibble(.init = 120, .step = 1) |> 
+  filter(.id < max(.id))
+
+liquor_cv_fit <- liquor_cv |> 
+  model(snaive = SNAIVE(sales), 
+        ets = ETS(log(sales)),
+        arima = ARIMA(log(sales)))
+
+saveRDS(liquor_cv_fit, "results/liquor_cv_fit.rds")
+# There are 216 forecast origins. The sample has 336 months which we deduct 120 for the first training set, plus 1, hence giving 217 training sets.
+# You drop the last one because there's no 2020 Jan actual in the sample to compare against.
+
+liquor_cv_fc <- liquor_cv_fit |> 
+  forecast(h = 1)
+
+liquor_cv_fc |> 
+  accuracy(liquor, measures = list(RMSE = RMSE, MAE = MAE)) |> 
+  knitr::kable(digits = 2)
+
+# The first forecast: 2002 Jan, from the training set ending 2001 Dec. The last forecast: 2019 Dec, from the training set ending 2019 Nov.
+# The ARIMA model forecasts most accurately on both metrics. Its RMSE is about 14% lower than ETS and about half of SNAIVE's. Both fable models easily beat the benchmark, which shows that using recent momentum and the trend is worth a lot compared wit just copying last year's same month.
+# The ARIMA failed the Ljung-Box test but still won the horse race. This explains how leftover residual structure doesn't mean the model forecasts badly. 
+# Out-of-sample accuracy is the test that matters.
+
+
+
+
+
 
 
