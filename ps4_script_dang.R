@@ -314,6 +314,40 @@ saveRDS(ip_race, "results/ip_race.rds")
 # components estimated on 1960-1990 data use information from the entire sample, both in the means and standard deviations used to standardize the series and in the loading that defines each factor.
 # A forecaster in 1995 could not have known that, so the horse race would overstate how well the factor model forecasts in real time.
 
+direct_race <- function(series, h = 12, r = 3) {
+  lv <- md |>
+    mutate(log_x = log(.data[[series]]),
+           g     = 100 * (log_x - lag(log_x))) |>
+    filter(date >= as.Date("1960-03-01"), date <= as.Date("2019-12-01"))
+  yh <- 100 * (lead(lv$log_x, h) - lv$log_x)      # growth over the next h months
+  g  <- lv$g                                       # growth over the latest month
+  e_ar <- NULL
+  e_fa <- NULL
+  for (T in init:(n - h)) {
+    F_T <- prcomp(scale(Z[1:T, ]))$x[, 1:r, drop = FALSE]
+    i   <- 1:(T - h)                               # only targets already observed at T
+    d   <- data.frame(yh = yh[i], g = g[i], F_T[i, , drop = FALSE])
+    new <- data.frame(g = g[T], F_T[T, , drop = FALSE])
+    e_ar <- c(e_ar, yh[T] - predict(lm(yh ~ g, d), new))
+    e_fa <- c(e_fa, yh[T] - predict(lm(yh ~ ., d), new))
+  }
+  tibble(series, forecasts = length(e_ar),
+         RMSE_AR = sqrt(mean(e_ar^2)), RMSE_FA = sqrt(mean(e_fa^2)),
+         MAE_AR  = mean(abs(e_ar)),    MAE_FA  = mean(abs(e_fa)),
+         DM_pvalue = forecast::dm.test(e_ar, e_fa, h = h, power = 2,
+                                       varestimator = "bartlett")$p.value)
+}
 
+cpi_race <- direct_race("CPIAUCSL")
+cpi_race
+saveRDS(cpi_race, "results/cpi_race.rds")
+
+# Percent reduction in RMSE from adding factors
+100 * (1 - cpi_race$RMSE_FA / cpi_race$RMSE_AR) 
+
+# Yes, the factors improve the forecast of CPI inflation over the next 12 months. Across 349 forecasts, the RMSE falls from 2.11 for the model with only the latest month's inflation,
+# to 1.89 with the three factors added. The MAE falls from 1.58 to 1.35. The Diebold-Mariano p-value is 0.0004,
+# so the improvement is statistically significant at any conventional level, even after adjusting for autocorrelation that comes from
+# overlapping 12-month forecast windows. This makes sense since a single month of inflaiton is a noisy signal of where prices are heading over the next year.
 
 
