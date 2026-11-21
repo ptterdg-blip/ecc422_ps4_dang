@@ -122,5 +122,118 @@ cor(liquor_errs$arima, liquor_errs$ets)
 # The combination didn't win since averaging only help if the two models' error partly cancel. ETS is significantly less accurate in comparison, so equal weights over-weight the weaker model.
 # Furthermore, combing still acts as insurance since in real time, you wouldn't know ahead of time which model would win, and the combo got almost all of ARIMA's accuracy without your having to pick a winner.
 
+qd_raw <- read_csv("data/fredqd_2026-09.csv", show_col_types = FALSE) |> 
+  slice(-(1:2))
+
+growth <- function(x) 100 * difference(log(x))
+
+qd <- qd_raw |>
+  mutate(date = as.Date(sasdate, "%m/%d/%Y")) |>
+  transmute(date,
+            gdp    = growth(GDPC1),     # real GDP
+            cons   = growth(PCECC96),   # real consumption
+            inv    = growth(GPDIC1),    # real investment
+            emp    = growth(PAYEMS),    # payroll employment
+            infl   = growth(GDPCTPI),   # GDP price index
+            unrate = difference(UNRATE),     # unemployment rate
+            ffr    = difference(FEDFUNDS),   # federal funds rate
+            gs10   = difference(GS10)) |>    # 10-year Treasury yield
+  filter(date >= as.Date("1960-03-01"), date <= as.Date("2019-12-01"))
+
+y <- qd |> select(-date) |> as.matrix()
+
+nrow(y)
+head(y)
+
+N <- nrow(y)
+origins <- 120:(N - 1)
+actual <- y[121:N, ]
+
+# There are 120 forecasts per variable. The first is 1990 Q1 (1990-03-01), and the last is 2019 Q4 (2019-12-01)
+
+var_ols_fc <- function(z, p) {
+  e <- embed(z, p + 1)            # columns: y_t, then its lags 1 to p
+  M <- ncol(z)                    # number of variables
+  B <- coef(lm(e[, 1:M] ~ e[, -(1:M)]))
+  x <- c(1, t(z[nrow(z):(nrow(z) - p + 1), ]))   # constant, latest p lags
+  x %*% B
+}
+
+fc_var1 <- NULL
+fc_var4 <- NULL
+for (T in origins) {
+  fc_var1 <- rbind(fc_var1, var_ols_fc(y[1:T, ], 1))
+  fc_var4 <- rbind(fc_var4, var_ols_fc(y[1:T, ], 4))
+}
+
+rmse_by_var <- function(f) sqrt(colMeans((actual - f)^2))
+
+rmse_by_var(fc_var1)
+rmse_by_var(fc_var4)
+
+# VAR(1) wins for 7 out of the 8 variables. The only exception is inflation, where VAR(4) is ahead by 0.001, which is effectively a tie.
+# The biggest gaps are the fed fund rate (0.390 vs. 0.497), which is about 22% worse for VAR(4)) and employment (0.196 vs. 0.228). 
+# The smaller model can perform better since VAR(1) has 72 coefficients and VAR(4) has 264. To expand on this, in the first training
+# window, each equation in the VAR(4) estimates 33 coefficeints from the 116 observations which is noisy.
+# The extra lags can only reduce in-sample error, and out of sample estimation noise usually outweighs whatever real dynamics they capture (bias-variance tradeoff)
+
+bvar_cv <- function(lambda) {
+  pr <- bv_priors(hyper = "lambda",
+                  mn = bv_mn(lambda = bv_lambda(mode = lambda, sd = 0.4,
+                                                min = 0.999 * lambda,
+                                                max = 1.001 * lambda),
+                             b = 0))
+  fc <- NULL
+  for (T in origins) {
+    fit_T <- bvar(y[1:T, ], lags = 4, priors = pr,
+                  n_draw = 2000, n_burn = 1000, verbose = FALSE)
+    x <- c(1, t(y[T:(T - 3), ]))         # constant and 4 lags of each variable
+    fc <- rbind(fc, x %*% coef(fit_T))   # forecast of y_{T+1}
+  }
+  fc
+}
+
+set.seed(422)
+fc_bvar_03 <- bvar_cv(0.3)
+saveRDS(fc_bvar_03, "results/fc_bvar_03.rds")
+
+set.seed(422)
+fc_bvar_005 <- bvar_cv(0.05)
+
+var_results <- tibble(
+  Variable = colnames(y),
+  `VAR(1)` = rmse_by_var(fc_var1),
+  `VAR(4)` = rmse_by_var(fc_var4),
+  `BVAR(4), lambda = 0.3` = rmse_by_var(fc_bvar_03),
+  `BVAR(4), lambda = 0.05` = rmse_by_var(fc_bvar_005)
+)
+
+saveRDS(var_results, "results/var_results.rds")
+
+var_results |> knitr::kable(digits = 3)
+
+# 1) BVAR(4), lambda = 0.3 vs. OLS VAR(4): The BVAR wins for all 8 variables, cutting RMSE by aobut 5-8% for most and 17% for the fed funds rate. the variables 
+# and lags are identical, so the only difference is the shrinkage. Pulling the 264 coefficients toward 0 trades a little bias for a big reduction in estimation noise.
+
+# 2) How does it compare? The BVAR wins for 3 varaibles and VAR(1) wins for the other 5. So the results are relatively split. Dropping lags entirely
+# and shrinking them are two ways of fixing the same overfitting problem, and here they perform about equally well.
+
+# 3) lambda = 0.05 is too much shrinkage for most variables. Variables such as employment and inflation get much worse. Those series are persistent, and forcing their own-lag coefficients toward 0 throws away real dynamics.
+# some shrinkage helps, but too much hurts.
+# The winner's RMSE is not a fair estimate of future accuracy. If you pick the lowest RMSE out of 4 models on the same 120 forecasts you're using to evaluate them, you're partly picking whichever model got lucky over the 1990-2019 (Selection Bias).
+
+e_var4 <- actual[, "gdp"] - fc_var4[, 1]
+e_bvar <- actual[, "gdp"] - fc_bvar_03[, 1]
+dm_gdp <- forecast::dm.test(e_var4, e_bvar, h = 1, power = 2)
+
+# Second variable:
+e_var4_infl <- actual[, "infl"] - fc_var4[, 5]
+e_bvar_infl <- actual[, "infl"] - fc_bvar_03[, 5]
+dm_infl <- forecast::dm.test(e_var4_infl, e_bvar_infl, h = 1, power = 2)
+saveRDS(list(gdp = dm_gdp, infl = dm_infl), "results/dm_var.rds")
+forecast::dm.test(e_var4, e_bvar, h = 1, power = 2)
+
+
+
 
 
