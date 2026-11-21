@@ -104,7 +104,23 @@ forecast::dm.test(liquor_errs$arima, liquor_errs$snaive, h = 1, power = 2)
 # for ARIMA vs. SNAIVE, there is an overwhelming rejection, where the ARIMA is far more accurate than the naive benchmark.
 # The liquor store should use the ARIMA model since it is ranked first on both RMSE and MAE, and its lead over both alternatives is statistically significant.
 
+# 3 Forecast Combination
 
+liquor_combo_fc <- liquor_cv_fit |> 
+  mutate(combo = (arima + ets) / 2) |> 
+  forecast(h =1)
+
+liquor_combo_fc |> 
+  accuracy(liquor, measures = list(RMSE = RMSE, MAE = MAE)) |> 
+  knitr::kable(digits =2)
+
+# The combination beats ETS by a lot and is close to ARIMA, but it doesn't beat ARIMA. On MAE it's nearly extremely close. 
+# On RMSE, it lands between the two models, closer to ARIMA.
+
+cor(liquor_errs$arima, liquor_errs$ets)
+# The error correlation is 0.878, meaning that when ARIMA misses high, ETS generally misses high as well.
+# The combination didn't win since averaging only help if the two models' error partly cancel. ETS is significantly less accurate in comparison, so equal weights over-weight the weaker model.
+# Furthermore, combing still acts as insurance since in real time, you wouldn't know ahead of time which model would win, and the combo got almost all of ARIMA's accuracy without your having to pick a winner.
 
 
 
