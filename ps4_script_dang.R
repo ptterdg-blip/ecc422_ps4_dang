@@ -348,6 +348,6 @@ saveRDS(cpi_race, "results/cpi_race.rds")
 # Yes, the factors improve the forecast of CPI inflation over the next 12 months. Across 349 forecasts, the RMSE falls from 2.11 for the model with only the latest month's inflation,
 # to 1.89 with the three factors added. The MAE falls from 1.58 to 1.35. The Diebold-Mariano p-value is 0.0004,
 # so the improvement is statistically significant at any conventional level, even after adjusting for autocorrelation that comes from
-# overlapping 12-month forecast windows. This makes sense since a single month of inflaiton is a noisy signal of where prices are heading over the next year.
+# overlapping 12-month forecast windows. This makes sense since a single month of inflation is a noisy signal of where prices are heading over the next year.
 
 
