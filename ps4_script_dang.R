@@ -86,7 +86,23 @@ liquor_cv_fc |>
 # The ARIMA failed the Ljung-Box test but still won the horse race. This explains how leftover residual structure doesn't mean the model forecasts badly. 
 # Out-of-sample accuracy is the test that matters.
 
+# 2.4 Are the Differences Significant?
 
+liquor_errs <- liquor_cv_fc |>
+  as_tibble() |> 
+  left_join(as_tibble(liquor) |>  select(Month, actual = sales),
+            by = "Month") |> 
+  mutate(e = actual - .mean) |> 
+  select(Month, .model, e) |> 
+  pivot_wider(names_from = .model, values_from = e)
+
+forecast::dm.test(liquor_errs$arima, liquor_errs$ets, h = 1, power = 2)
+forecast::dm.test(liquor_errs$arima, liquor_errs$snaive, h = 1, power = 2)
+
+#  The DM statistic for ARIMA vs. ETS is -2.9062 with a p-value of 0.004, while the ARIMA vs. SNAIVE
+# DM statistic was -10.75 and the p-value is close to 0. These results mean that we reject equal accuracy at 1% level. The negative sign means that ARIMA is significantly more accurate, so the 14% RMSE gap isn't just noise.
+# for ARIMA vs. SNAIVE, there is an overwhelming rejection, where the ARIMA is far more accurate than the naive benchmark.
+# The liquor store should use the ARIMA model since it is ranked first on both RMSE and MAE, and its lead over both alternatives is statistically significant.
 
 
 
