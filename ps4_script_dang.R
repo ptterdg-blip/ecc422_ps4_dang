@@ -233,6 +233,86 @@ dm_infl <- forecast::dm.test(e_var4_infl, e_bvar_infl, h = 1, power = 2)
 saveRDS(list(gdp = dm_gdp, infl = dm_infl), "results/dm_var.rds")
 forecast::dm.test(e_var4, e_bvar, h = 1, power = 2)
 
+md_raw <- read_csv("data/fredmd_2026-09.csv", show_col_types = FALSE)
+tcode <- unlist(md_raw[1, -1])
+md <- md_raw[-1, ] |> mutate(date = as.Date(sasdate, "%m/%d/%Y"))
+
+transform_series <- function(x, code) {
+  d <- function(v) c(NA, diff(v))
+  switch(as.character(code),
+         "1" = x,                      # level
+         "2" = d(x),                   # first difference
+         "3" = d(d(x)),                # second difference
+         "4" = log(x),                 # log
+         "5" = 100 * d(log(x)),        # growth rate
+         "6" = 100 * d(d(log(x))),     # change in the growth rate
+         "7" = d(x / dplyr::lag(x) - 1))
+}
+
+fm <- map2_dfc(md[names(tcode)], tcode, transform_series) |>
+  mutate(date = md$date, .before = 1) |>
+  filter(date >= as.Date("1960-03-01"), date <= as.Date("2019-12-01"))
+
+fm <- fm[, colSums(is.na(fm)) == 0]
+
+dim(fm)
+
+tcode[c("INDPRO", "PAYEMS", "CPIAUCSL", "FEDFUNDS")]
+# INDPRO and PAYEMS both have transformation code 5, so each enters as a monthly 
+# growth rate: 100 times the first difference of the log. CPIAUCSL has code 6, so it enters as 100 times the second difference of the log,
+# which is the month-to-month change in the monthly inflation rate. FEDFUNDS has code 2, so it enters as a simple first difference,
+# the change in the rate in percentage points.
+
+#The difference between INDPRO and FEDFUNDS comes from what each series measures. Industrial production is an index that grows roughly
+#exponentially over time, so its log difference gives a stationary percent growth rate.
+# The federal funds rate is already measured in percent and has no exponential trend, so the change in percentage points is the natural 
+#unit. A log transformation would also behave badly when the rate is close to zero, as it was from 2009 to 2015.
+
+Z  <- fm |> select(-date) |> as.matrix()
+pc <- prcomp(scale(Z))
+summary(pc)$importance[, 1:5]
+
+# The first three factors explain 29.45% of the total variation in the 121 standardized series: 14.98% from the first factor, 7.41% from the 
+# second, and 7.06% from the third. This matches the result from class. Three series built from the data capture almost a third of the variation 
+# across all 121, which shows how much of the movement in U.S. macro data is shared across series.
+
+F1 <- pc$x[, 1] * sign(cor(pc$x[, 1], fm$INDPRO))
+
+f1_plot <- tibble(date = fm$date, F1 = F1) |>
+  ggplot(aes(date, F1)) +
+  geom_line() +
+  labs(title = "First Factor from FRED-MD", x = NULL, y = NULL) +
+  theme_minimal()
+f1_plot
+
+sort(abs(cor(pc$x[, 1], Z))[1, ], decreasing = TRUE)[1:8]
+sort(abs(cor(pc$x[, 2], Z))[1, ], decreasing = TRUE)[1:8]
+
+# The first factor is most correlated with employment, industrial production and capacity utilization series (PAYEMS, IPMANSICS, USGOOD, INDPRO, MANEMP, IPFPNSS, CUMFNS, DMANEMP), 
+#all from the appendix's Output and Income or Labor Market groups. Since it also drops sharply in every recession, it captures real economic activity, or the business cycle.
+# The second factor is most correlated with eight price indexes from the Prices group (including CPIAUCSL, PCEPI, CPI commodities and CPI transportation). Since these use transformation code 6,
+# it captures changes in inflation, likely driven by energy and commodity prices.
+
+ip   <- fm$INDPRO
+n    <- nrow(Z)
+init <- which(fm$date == as.Date("1989-12-01"))
+
+e_ar <- NULL
+e_fa <- NULL
+for (T in init:(n - 1)) {
+  F_T <- prcomp(scale(Z[1:T, ]))$x[, 1:3]          # factors using data through T only
+  d   <- data.frame(y_next = ip[2:T], y = ip[1:(T - 1)], F_T[1:(T - 1), ])
+  new <- data.frame(y = ip[T], t(F_T[T, ]))
+  e_ar <- c(e_ar, ip[T + 1] - predict(lm(y_next ~ y, d), new))
+  e_fa <- c(e_fa, ip[T + 1] - predict(lm(y_next ~ ., d), new))
+}
+ip_race <- c(RMSE_AR = sqrt(mean(e_ar^2)), RMSE_FA = sqrt(mean(e_fa^2)))
+ip_race                                   # should be 0.617 and 0.589
+saveRDS(ip_race, "results/ip_race.rds")
+
+# Estimating the factors once on the full sample would be cheating because it introduces look-ahead bias. Principal
+# components estimated on 1960-1990 data use information from the entire sample, both in the means and standard deviations used to standardize the series and in the loading that defines each factor.
+# A forecaster in 1995 could not have known that, so the horse race would overstate how well the factor model forecasts in real time.
 
 
 
